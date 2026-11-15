@@ -1,0 +1,29 @@
+{
+  "catalog": {
+    "entry": "/primary",
+    "fileUse": "master"
+  },
+  "resources": {
+    "/primary": {
+      "file": "primary.bin",
+      "type": "application/xml"
+    },
+    "/pages/p1.txt": {
+      "file": "resource-01.bin",
+      "type": "text/plain"
+    },
+    "/pages/p2.txt": {
+      "file": "resource-02.bin",
+      "type": "text/plain",
+      "phases": {
+        "1": {
+          "status": 404
+        }
+      }
+    },
+    "/pages/t1.txt": {
+      "file": "resource-03.bin",
+      "type": "text/plain"
+    }
+  }
+}
