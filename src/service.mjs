@@ -3,9 +3,20 @@ import { fileURLToPath } from 'node:url';
 import { Store } from './store.mjs';
 import { acquire } from './transport.mjs';
 import { inspect } from './reader.mjs';
+import { ingestDelivery } from './ingest.mjs';
 import { startProvider } from './provider.mjs';
 
-export async function startService({ source, directory, port = 0 }) {
+async function readJson(request, limit = 16384) {
+  const chunks = []; let length = 0;
+  for await (const chunk of request) {
+    length += chunk.length;
+    if (length > limit) throw new Error('request_too_large');
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString());
+}
+
+export async function startService({ source, directory, port = 0, use = 'master' }) {
   const store = await new Store(directory).initialize();
   const server = http.createServer(async (request, response) => {
     response.setHeader('Content-Type', 'application/json');
@@ -17,20 +28,31 @@ export async function startService({ source, directory, port = 0 }) {
         response.setHeader('Content-Type', 'application/octet-stream');
         return response.end(await store.object(url.pathname.slice(9)));
       }
+      if (url.pathname === '/deliveries' && request.method === 'GET') {
+        return response.end(JSON.stringify(await store.listDeliveries()));
+      }
+      if (url.pathname.startsWith('/deliveries/') && request.method === 'GET') {
+        return response.end(JSON.stringify(await store.delivery(url.pathname.slice(12))));
+      }
       if (url.pathname === '/intakes' && request.method === 'POST') {
-        const chunks = []; let length = 0;
-        for await (const chunk of request) {
-          length += chunk.length;
-          if (length > 16384) throw new Error('request_too_large');
-          chunks.push(chunk);
-        }
-        const payload = JSON.parse(Buffer.concat(chunks).toString());
+        const payload = await readJson(request);
         if (typeof payload.path !== 'string') throw new Error('path_required');
         const result = await acquire(source, payload.path);
         const parsed = inspect(result.bytes);
         const record = await store.accept(result.bytes, new URL(payload.path, source).href, parsed);
         response.statusCode = 201;
         return response.end(JSON.stringify(record));
+      }
+      if (url.pathname === '/deliveries' && request.method === 'POST') {
+        const payload = await readJson(request);
+        if (typeof payload.path !== 'string') throw new Error('path_required');
+        const selectedUse = typeof payload.use === 'string' && payload.use ? payload.use : use;
+        // 构造即校验：跨来源入口在领取前拒绝（new URL 相对解析 + ingest 内同源判定）。
+        new URL(payload.path, source);
+        const delivery = await ingestDelivery({ source, entry: payload.path, use: selectedUse,
+          acquire, store });
+        response.statusCode = 201;
+        return response.end(JSON.stringify(delivery));
       }
       response.writeHead(404); response.end(JSON.stringify({ error: 'not_found' }));
     } catch (error) { response.statusCode = 422; response.end(JSON.stringify({ error: error.message })); }
